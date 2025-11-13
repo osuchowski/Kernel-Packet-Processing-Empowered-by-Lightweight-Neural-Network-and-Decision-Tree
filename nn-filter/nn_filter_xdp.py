@@ -5,6 +5,7 @@
 from bcc import BPF
 from bcc import lib
 import sys
+import os
 import time
 import json
 from socket import inet_ntop, ntohs, AF_INET, AF_INET6
@@ -13,8 +14,9 @@ import ctypes as ct
 import joblib
 from datetime import datetime
 
+curdir = os.path.dirname(__file__)
 def usage():
-    print("Usage: {0} <ifdev> <output-dir> <flag>".format(sys.argv[0]))
+    print("Usage: {0} <ifdev> <flag>".format(sys.argv[0]))
     exit(1)
 
 bpf_text = """
@@ -53,7 +55,10 @@ struct pkt_leaf_t {
   u64 features[6];
 };
 
-BPF_ARRAY(out_input, int64_t, 16);
+BPF_PERCPU_ARRAY(out_input2, int64_t, 16);
+BPF_PERCPU_ARRAY(out_input, int64_t, 16);
+// BPF_ARRAY(out_input2, int64_t, 16);
+// BPF_ARRAY(out_input, int64_t, 16);
 BPF_ARRAY(layer_1_weight, int, LAYER_1_WEIGHT);
 BPF_ARRAY(layer_2_weight, int, LAYER_2_WEIGHT);
 BPF_ARRAY(layer_3_weight, int, LAYER_3_WEIGHT);
@@ -72,6 +77,82 @@ BPF_TABLE("lru_hash", struct pkt_key_t, struct pkt_leaf_t, sessions, 1024);
 BPF_TABLE("prog", int, int, jmp_table, 8);
 BPF_HASH(dropcnt, int, u32);
 
+
+// static __always_inline int ip_decrease_ttl(struct iphdr *iph)
+// {
+//     u32 check = (__force u32)iph->check;
+// 
+//     check += (__force u32)htons(0x0100);
+//     iph->check = (__force __sum16)(check + (check >= 0xFFFF));
+//     return --iph->ttl;
+// }
+// int forward(struct xdp_md *ctx) {
+//   void* data_end = (void*)(long)ctx->data_end;
+//   void* data = (void*)(long)ctx->data;
+//   struct ethhdr *eth = data;
+//   u64 nh_off = sizeof(*eth);
+//   struct iphdr *iph;
+//   struct tcphdr *th;
+//   struct udphdr *uh;
+//   int _zero = 0;
+//   int64_t _zero64 = 0;
+// 
+//   ethernet: {
+//     if (data + nh_off > data_end) {
+//       return XDP_DROP;
+//     }
+//     goto ip;
+//   }
+//   ip: {
+//     iph = data + nh_off;
+//     if ((void*)&iph[1] > data_end)
+//       return XDP_DROP;
+//     goto forward;
+//   }
+//   forward: {
+//     struct bpf_fib_lookup fib_params = {};
+//     if (iph->ttl <= 1) {
+//         return XDP_PASS;
+//     }
+//     __builtin_memset(&fib_params, 0, sizeof(fib_params));
+//     if (eth->h_proto == htons(ETH_P_IP)) {
+//         if ((void*)&iph[1] > data_end) {
+//             return XDP_DROP;
+//         }
+//         fib_params.family = AF_INET;
+//         fib_params.tos = iph->tos;
+//         fib_params.l4_protocol = iph->protocol;
+//         fib_params.sport = 0;
+//         fib_params.dport = 0;
+//         fib_params.tot_len = bpf_ntohs(iph->tot_len);
+//         fib_params.ipv4_src = iph->saddr;
+//         fib_params.ipv4_dst = iph->daddr;
+//         fib_params.ifindex = ctx->ingress_ifindex;
+//     } else {
+//         return XDP_PASS;
+//     }
+//     long rc;
+//     rc = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), BPF_FIB_LOOKUP_DIRECT);
+//     switch(rc) {
+//     case BPF_FIB_LKUP_RET_SUCCESS:
+//         ip_decrease_ttl(iph);
+//         __builtin_memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
+//         __builtin_memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
+//         return bpf_redirect(fib_params.ifindex, 0);
+//     case BPF_FIB_LKUP_RET_BLACKHOLE:
+//     case BPF_FIB_LKUP_RET_UNREACHABLE:
+//     case BPF_FIB_LKUP_RET_PROHIBIT:
+//         return XDP_DROP;
+//     case BPF_FIB_LKUP_RET_NOT_FWDED:
+//     case BPF_FIB_LKUP_RET_FWD_DISABLED:
+//     case BPF_FIB_LKUP_RET_UNSUPP_LWT:
+//     case BPF_FIB_LKUP_RET_NO_NEIGH:
+//     case BPF_FIB_LKUP_RET_FRAG_NEEDED:
+//         return XDP_PASS;
+//     }
+//   }
+//   return XDP_PASS;
+// }
 int nn1(struct xdp_md *ctx) {
   unsigned int k, m, _k, _m;
   int _zero = 0;
@@ -79,13 +160,18 @@ int nn1(struct xdp_md *ctx) {
   int rounded_value, tensor_int, tensor_frac, scale_factor_int, scale_factor_frac, accumulator, s_w_inv, s_x, s_x_inv, out_value;
   int64_t out;
   int8_t weight, x_q[H1];
+  // linear_layer(out_input, layer_2_weight, out_h1, layer_2_s_w_inv, dimension_layer2);
+  // quantize(x, x_q, layer_2_s_x, layer_2_s_x_inv, N*H1);
   s_x = *((int*)layer_2_s_x.lookup_or_init(&_zero, &_zero));
   s_x_inv = *((int*)layer_2_s_x_inv.lookup_or_init(&_zero, &_zero));
   scale_factor_int = (s_x + ROUND_CONST) >> FXP_VALUE;
   scale_factor_frac = s_x - (scale_factor_int << FXP_VALUE);
+  // bpf_trace_printk("nn1 (scale): %d %d ", s_x, (scale_factor_int << FXP_VALUE));
+  // bpf_trace_printk("nn1 (scale_factor_int): %d %d ", scale_factor_int, scale_factor_frac);
   for (m = 0; m < H1; m++) {
     _m = m;
     out = *out_input.lookup_or_init(&_m, &_zero64);
+    // bpf_trace_printk("nn1: x_q[%d]=%d %d", _m, x_q[m], out);
     tensor_int = (out + ROUND_CONST) >> FXP_VALUE;
     if (tensor_int > INT8_MAX_VALUE*s_x_inv) {
       x_q[m] = (int8_t)INT8_MAX_VALUE;
@@ -98,7 +184,9 @@ int nn1(struct xdp_md *ctx) {
       rounded_value = ((rounded_value + ROUND_CONST) >> FXP_VALUE) + tensor_int*scale_factor_int;
       x_q[m] = (int8_t)rounded_value; /* store quantized value in output tensor */
     }
+    // bpf_trace_printk("nn1 (x_q[%d]): %d ", _m, x_q[m]);
   }
+  // mat_mult(x_q, w, output, dimension_layer);
   for (m = 0; m < H2; m++) {
     accumulator = 0;
     for (k = 0; k < H1; k++) {
@@ -106,8 +194,11 @@ int nn1(struct xdp_md *ctx) {
       weight = *(int8_t*)layer_2_weight.lookup_or_init(&_k, &_zero);
       accumulator += x_q[k] * weight;
     }
+    // dequantize_per_row(output, w_scale_factor_inv, layer_2_s_x_inv, N, H2);
     _m = m;
+    // s_w_inv = *((int*)layer_2_s_w_inv.lookup_or_init(&_m, &_zero));
     out_value = *layer_2_s_w_inv.lookup_or_init(&_m, &_zero);
+    out_value *= s_x_inv;
     // out_value = s_w_inv * s_x_inv;
     out = (int64_t)accumulator;
     if (out_value > (1 << FXP_VALUE)) {
@@ -116,13 +207,14 @@ int nn1(struct xdp_md *ctx) {
     else {
       out = (out_value*out + ROUND_CONST) >> FXP_VALUE;
     }
+    // bpf_trace_printk("nn1: %d %d", _m, out);
+    // relu(output, N*M);
     out = MAX(out, 0);
-    out_input.update(&_m, &out);
+    out_input2.update(&_m, &out);
   }
   jmp_table.call(ctx, 1);
   return XDP_DROP;
 }
-
 int nn2(struct xdp_md *ctx) {
   unsigned int k, m, _k, _m;
   int _zero = 0;
@@ -136,7 +228,7 @@ int nn2(struct xdp_md *ctx) {
   scale_factor_frac = s_x - (scale_factor_int << FXP_VALUE);
   for (m = 0; m < H2; m++) {
     _m = m;
-    out = *out_input.lookup_or_init(&_m, &_zero64);
+    out = *out_input2.lookup_or_init(&_m, &_zero64);
     tensor_int = (out + ROUND_CONST) >> FXP_VALUE;
     if (tensor_int > INT8_MAX_VALUE*s_x_inv) {
       x_q[m] = (int8_t)INT8_MAX_VALUE;
@@ -161,7 +253,10 @@ int nn2(struct xdp_md *ctx) {
       accumulator += x_q[k] * weight;
     }
     _m = m;
-    out_value = *layer_3_s_w_inv.lookup_or_init(&_m, &_zero); // out_value = s_w_inv * s_x_inv;
+    // s_w_inv = *((int*)layer_3_s_w_inv.lookup_or_init(&_m, &_zero));
+    out_value = *layer_3_s_w_inv.lookup_or_init(&_m, &_zero);
+    // out_value = s_w_inv * s_x_inv;
+    out_value *= s_x_inv;
     out = (int64_t)accumulator;
     if (out_value > (1 << FXP_VALUE)) {
       out *= ((out_value + ROUND_CONST) >> FXP_VALUE);
@@ -173,13 +268,17 @@ int nn2(struct xdp_md *ctx) {
       argmax_over_cols = m; // return column
     }
   }
+  bpf_trace_printk("argmax_over_cols=%d", argmax_over_cols);
   if (argmax_over_cols != 0) {
-    return XDP_DROP;
+    // return XDP_DROP;
+    // jmp_table.call(ctx, 2);
     // return XDP_PASS;
   }
   u32 val = 0, *vp;
   vp = dropcnt.lookup_or_init(&_zero, &val);
   *vp += 1;
+  // jmp_table.call(ctx, 2);
+  // return XDP_DROP;
   return XDP_PASS;
 }
 int nn_xdp_drop_packet(struct xdp_md *ctx) {
@@ -200,6 +299,8 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
   pkt_key.daddr = 0;
   pkt_key.sport = 0;
   pkt_key.dport = 0;
+
+  // bpf_trace_printk("RX queue id is %d\\n", ctx->rx_queue_index);
 
   ethernet: {
     if (data + nh_off > data_end) {
@@ -294,17 +395,20 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
 
       unsigned int k, m, _k, _m;
 
+      sessions.update(&pkt_key, pkt_leaf);
+
       int64_t out, _data_scale;
       // NORMALIZATION
       for (k = 0; k < INPUT_DIM; k++) {
         unsigned int _k = k;
         out = *data_min.lookup_or_init(&_k, &_zero64);
         _data_scale = *data_scale.lookup_or_init(&_k, &_zero64);
-        x[k] = (x[k] - out) * _data_scale;
+        x[k] = ((x[k] - out) * _data_scale) >> FXP_VALUE;
+        // bpf_trace_printk("scaled: %d %lld", k, x[k]);
       }
 
       int rounded_value, tensor_int, tensor_frac, scale_factor_int, scale_factor_frac, accumulator, s_w_inv, s_x, s_x_inv, out_value;
-      int8_t weight, x_q[INPUT_DIM];
+      int8_t weight, x_q[INPUT_DIM] = {0};
 
       // linear_layer(x, layer_1_weight, out_input, layer_1_s_w_inv, dimension_layer1);
       // quantize(x, x_q, x_scale_factor, x_scale_factor_inv, N*INPUT_DIM);
@@ -312,6 +416,7 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
       s_x_inv = *((int*)layer_1_s_x_inv.lookup_or_init(&_zero, &_zero));
       scale_factor_int = (s_x + ROUND_CONST) >> FXP_VALUE;
       scale_factor_frac = s_x - (scale_factor_int << FXP_VALUE);
+        // bpf_trace_printk("nn0 (scale): %d %d ", s_x, s_x_inv);
       for (m = 0; m < INPUT_DIM; m++) {
         tensor_int = (x[m] + ROUND_CONST) >> FXP_VALUE;
         if (tensor_int > INT8_MAX_VALUE*s_x_inv) {
@@ -325,7 +430,9 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
           rounded_value = ((rounded_value + ROUND_CONST) >> FXP_VALUE) + tensor_int*scale_factor_int;
           x_q[m] = (int8_t)rounded_value; /* store quantized value in output tensor */
         }
+        // bpf_trace_printk("nn0: x_q[%d]=%d", m, x_q[m]);
       }
+      // mat_mult(x_q, w, output, dimension_layer);
       for (m = 0; m < H1; m++) {
         accumulator = 0;
         for (k = 0; k < INPUT_DIM; k++) {
@@ -333,9 +440,14 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
           weight = *(int8_t*)layer_1_weight.lookup_or_init(&_k, &_zero);
           accumulator += x_q[k] * weight;
         }
+        // dequantize_per_row(output, w_scale_factor_inv, x_scale_factor_inv, N, M);
         _m = m;
-        out_value = *layer_1_s_w_inv.lookup_or_init(&_m, &_zero); // out_value = s_w_inv * s_x_inv;
+        // s_w_inv = *((int*)layer_1_s_w_inv.lookup_or_init(&_m, &_zero));
+        out_value = *layer_1_s_w_inv.lookup_or_init(&_m, &_zero);
+        // out_value = s_w_inv * s_x_inv;
+        out_value *= s_x_inv;
         out = (int64_t)accumulator;
+        // bpf_trace_printk("nn0: acc[%d]=%d, out_value=%d", m, out, out_value);
         if (out_value > (1 << FXP_VALUE)) {
           out *= ((out_value + ROUND_CONST) >> FXP_VALUE);
         } else {
@@ -343,6 +455,7 @@ int nn_xdp_drop_packet(struct xdp_md *ctx) {
         }
         // relu(output, N*H1);
         out = MAX(out, 0);
+        // bpf_trace_printk("nn0: out[%d]=%d", m, out);
         out_input.update(&_m, &out);
       }
       jmp_table.call(ctx, 0);
@@ -371,7 +484,6 @@ def map_bpf_table(hashmap, values, c_type='int'):
             new_values[i] = ct.c_longlong(values[i])
     hashmap.items_update_batch(keys, new_values)
 
-SIMULATION_TIME = 100
 if __name__ == '__main__':
     if len(sys.argv) < 3 or len(sys.argv) > 4:
         usage()
@@ -393,7 +505,7 @@ if __name__ == '__main__':
             offload_device = device.encode()
             flags |= BPF.XDP_FLAGS_HW_MODE
     prefix_path = "runs"
-    with open('mlp_params.json') as f:
+    with open(f"{curdir}/mlp_params.json") as f:
         params = json.load(f)
 
     bpf_text = bpf_text.replace('LAYER_1_S_W_INV', str(len(params["layer_1_s_w_inv"])))
@@ -408,12 +520,13 @@ if __name__ == '__main__':
     print(offload_device)
 
     ret = []
+    # b = BPF(text=bpf_text, debug=0,  cflags=["-w", "-DMAPTYPE={maptype}"],
     b = BPF(text=bpf_text, debug=0,  cflags=["-w"],
             # allow_rlimit=True,
             device=offload_device)
-    for i in range(0, lib.bpf_num_functions(b.module)):
-        func_name = lib.bpf_function_name(b.module, i)
-        print(func_name, lib.bpf_function_size(b.module, func_name))
+    # for i in range(0, lib.bpf_num_functions(b.module)):
+    #     func_name = lib.bpf_function_name(b.module, i)
+    #     print(func_name, lib.bpf_function_size(b.module, func_name))
     try:
         fn = b.load_func("nn_xdp_drop_packet", BPF.XDP)
         b.attach_xdp(device, fn, flags=flags)
@@ -421,8 +534,10 @@ if __name__ == '__main__':
         jmp_table = b.get_table("jmp_table")
         nn1_fn = b.load_func("nn1", BPF.XDP);
         nn2_fn = b.load_func("nn2", BPF.XDP);
+        # fwd_fn = b.load_func("forward", BPF.XDP);
         jmp_table[ct.c_int(0)] = ct.c_int(nn1_fn.fd)
         jmp_table[ct.c_int(1)] = ct.c_int(nn2_fn.fd)
+        # jmp_table[ct.c_int(2)] = ct.c_int(fwd_fn.fd)
 
         layer_1_weight  = b.get_table("layer_1_weight")
         layer_2_weight  = b.get_table("layer_2_weight")
@@ -454,24 +569,21 @@ if __name__ == '__main__':
         map_bpf_table(layer_3_s_x,     params['layer_3_s_x'],     'int')
         map_bpf_table(data_min,        params['data_min'],        'int64_t')
         map_bpf_table(data_scale,      params['data_scale'],      'int64_t')
-
+        prev = 0
+        interval = 100
         start = datetime.now()
         while True:
             try:
                 dropcnt.clear()
+                start1 = datetime.now()
                 time.sleep(1)
-                for k, v in dropcnt.items():
-                    ret.append(v.value)
                 end = datetime.now()
+                for k, v in dropcnt.items():
+                    print(end, int(v.value / (end - start1).total_seconds()))
+                    ret.append(int(v.value / (end - start1).total_seconds()))
                 duration = (end - start).total_seconds()
-                if duration > SIMULATION_TIME:
-                    break
             except KeyboardInterrupt:
                 break
     finally:
         b.remove_xdp(device, flags)
-        filename = f"{resdir}/rxpps.log"
-        with open (filename, 'w') as f:
-            for d in ret:
-                f.write(f"{d}\n")
 
