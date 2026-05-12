@@ -104,7 +104,7 @@ def eval_epoch(model: nn.Module, data_loader:DataLoader, loss_fn:nn.CrossEntropy
         loss_fn (nn.CrossEntropyLoss)
 
     Returns:
-        [Float]: average validation loss 
+        [Float]: average validation loss
     """
     model.eval()
     num_batches = len(data_loader)
@@ -125,6 +125,8 @@ def get_nth_split(dataset, n_fold, index):
     train_indices, test_indices = indices[0:bottom]+indices[top:], indices[bottom:top]
     return train_indices, test_indices
 
+# import pdb  # Import the Python debugger
+
 MULTIPLIER = 2 ** 16
 def get_dataset(data, is_binary=True):
     data_list = []
@@ -140,36 +142,61 @@ def get_dataset(data, is_binary=True):
         y = y.numpy().astype(np.int64)
         y2 = y2.numpy().astype(np.int64)
 
-        # average = np.zeros(3, dtype=np.int64)
-        # deviation = np.zeros(3, dtype=np.int64)
-        running_sum = np.zeros(3)
-        # deviation = np.zeros(3)
-        running_sumsq = np.zeros(3)
+        # --- NAIVE APPROACH VARIABLES ---
+        running_sum = np.zeros(3, dtype=np.float64)
+        running_sumsq = np.zeros(3, dtype=np.float64)
+
+        # --- WELFORD APPROACH VARIABLES ---
+        welford_average = np.zeros(3, dtype=np.float64)
+        M2 = np.zeros(3, dtype=np.float64)
+
         for i in range(item.shape[0]):
             # item[i,:6]: sport, dport, protocol, tot_len, interval, direction
             current_vector = item[i,:6]
+            x = current_vector[3:]
+            count = i + 1
 
-            running_sum += current_vector[3:]
-            # current_average = (average/(i+1)).astype(np.int64)
-            current_average = (running_sum/(i+1))
+            # --- 1. NAIVE CALCULATION ---
+            running_sum += x
+            naive_average = running_sum / count
+            # running_sumsq += np.square(x)
+            # if count == 1:
+            #     naive_variance = np.zeros(3, dtype=np.float64)
+            # else:
+            #     naive_pop_variance = (running_sumsq / count) - np.square(naive_average)
+            #     # Convert population variance to sample variance
+            #     naive_variance = naive_pop_variance * (count / (count - 1))
 
-            # deviation += np.abs(current_vector[3:]-current_average)
-            # current_deviation = (deviation/(i+1))
-            current_average_squared = np.square(current_average)
+            # --- 2. WELFORD CALCULATION ---
+            delta = x - welford_average
+            welford_average = welford_average + (delta / count)
+            delta2 = x - welford_average
+            M2 = M2 + (delta * delta2)
 
-            # current_deviation = (deviation/(i+1)).astype(np.int64)
-            running_sumsq += np.square(current_vector[3:])
-            current_variance = (running_sumsq/(i+1)) - current_average_squared
+            if count == 1:
+                welford_variance = np.zeros(3, dtype=np.float64)
+            else:
+                welford_variance = M2 / (count - 1)
+
+            # --- TRIGGER DEBUGGER ---
+            # Pauses execution here so you can compare the variables
+            # pdb.set_trace()
+
+            # To avoid stopping on every single loop, you could instead use a condition:
+            # if count == 1000:  # Pause at the 1000th packet to see drift
+            #     pdb.set_trace()
+
+            current_average_squared = np.square(welford_average)
 
             squared_cv = np.divide(
-                current_variance,
+                welford_variance,
                 current_average_squared,
-                out=np.zeros_like(current_variance),
+                out=np.zeros_like(welford_variance),
                 where=current_average_squared!=0
             )
 
             # final_vector = np.concatenate((current_vector, current_average))
-            final_vector = np.concatenate((current_vector, current_average, squared_cv))
+            final_vector = np.concatenate((current_vector, naive_average, squared_cv))
         new_dataset.append(final_vector)
         # new_dataset2.append(deepcopy(final_vector))
 
