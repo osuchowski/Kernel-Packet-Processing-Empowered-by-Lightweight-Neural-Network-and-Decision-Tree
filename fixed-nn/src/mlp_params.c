@@ -1,6 +1,10 @@
 #include "mlp_params.h"
 
 
+const int64_t data_min[12] = {0, 0, 65536, 524288, 0, 0, 524288, 0, 4096, 0, 0, 0};
+
+const int64_t data_scale[12] = {1, 1, 1150, 3, 0, 65536, 11, 0, 69905, 3326, 656, 4096};
+
 const int layer_1_s_x = 8323072;
 
 const int layer_1_s_x_inv = 516;

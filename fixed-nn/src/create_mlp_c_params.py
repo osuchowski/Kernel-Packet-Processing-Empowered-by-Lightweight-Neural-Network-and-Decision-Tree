@@ -38,6 +38,17 @@ if __name__ == '__main__':
     hidden_sizes = saved_stats['hidden_sizes']
 
     ret = {}
+
+    scaler = saved_stats.get('scaler')
+    data_min_fxp = None
+    data_scale_fxp = None
+    if scaler is not None:
+        data_min_fxp = (scaler.data_min_ * (2 ** 16)).round().astype(np.int64).tolist()
+        data_scale_fxp = (scaler.scale_ * (2 ** 16)).round().astype(np.int64).tolist()
+        ret["data_min"] = data_min_fxp
+        ret["data_scale"] = data_scale_fxp
+    else:
+        print("Warning: 'scaler' not found in saved checkpoint. data_min and data_scale will not be exported.")
     # create header file
     with open('../src/mlp_params.h', 'w') as f:
         f.write('/*******************************************************************\n')
@@ -60,6 +71,11 @@ if __name__ == '__main__':
             f.write(f'#define OUTPUT_DIM {7}\n')
         f.write(f'#endif\n')
         f.write('#include <stdint.h>\n\n\n')
+
+        if data_min_fxp is not None:
+            f.write('// normalization constants\n')
+            f.write(f"extern const int64_t data_min[{len(data_min_fxp)}];\n")
+            f.write(f"extern const int64_t data_scale[{len(data_scale_fxp)}];\n\n")
 
 
         f.write('// quantization/dequantization constants\n')
@@ -101,6 +117,14 @@ if __name__ == '__main__':
             pass
         else:
             f.write('#include "mlp_params.h"\n\n\n')
+            if data_min_fxp is not None:
+                f.write(f"const int64_t data_min[{len(data_min_fxp)}] = {{")
+                f.write(", ".join(map(str, data_min_fxp)))
+                f.write("};\n\n")
+
+                f.write(f"const int64_t data_scale[{len(data_scale_fxp)}] = {{")
+                f.write(", ".join(map(str, data_scale_fxp)))
+                f.write("};\n\n")
 
         for layer_idx in range(1, 4):
             name = f'layer_{layer_idx}_s_x'
