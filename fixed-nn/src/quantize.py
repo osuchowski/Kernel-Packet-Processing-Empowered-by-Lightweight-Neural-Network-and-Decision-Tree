@@ -130,11 +130,12 @@ if __name__ == '__main__':
     torch.manual_seed(SEED)
 
     # load model
-    saved_stats = torch.load(os.path.join(args.save_dir, args.filename))
+    saved_stats = torch.load(os.path.join(args.save_dir, args.filename), weights_only=False)
 
     calib_method = args.calib_method
 
     state_dict = saved_stats['state_dict']
+    scaler = saved_stats.get('scaler')
 
     hidden_sizes = None if 'convnet' in args.filename else saved_stats['hidden_sizes']
     channel_sizes = None if 'mlp' in args.filename else saved_stats['channel_sizes']
@@ -184,7 +185,7 @@ if __name__ == '__main__':
     train_data = torch.utils.data.Subset(dataset, train_indices)
     # test_data = torch.utils.data.Subset(dataset, test_indices)
 
-    new_dataset_train, new_labels_train = get_dataset(train_data, args.is_binary)
+    new_dataset_train, new_labels_train = get_dataset(train_data, args.is_binary, scaler=scaler)
     # new_dataset_test, new_labels_test = get_dataset(test_data)
     train_trainset = PacketFlowDataset(new_dataset_train, new_labels_train)
     # test_testset = PacketFlowDataset(new_dataset_test, new_labels_test)

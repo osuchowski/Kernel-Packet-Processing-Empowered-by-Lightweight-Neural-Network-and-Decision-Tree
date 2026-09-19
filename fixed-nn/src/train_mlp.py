@@ -126,7 +126,7 @@ def get_nth_split(dataset, n_fold, index):
     return train_indices, test_indices
 
 MULTIPLIER = 2 ** 16
-def get_dataset(data, is_binary=True):
+def get_dataset(data, is_binary=True, scaler=None, return_scaler=False):
     data_list = []
     for item in data:
         data_list.append(item)
@@ -182,12 +182,15 @@ def get_dataset(data, is_binary=True):
                 _y = np.ones(1) * 0
             new_labels.append(_y.astype(np.int64))
         # new_dataset.append((final_vector, y[0]))
-    scaler = MinMaxScaler()
-    scaler.fit(new_dataset)
+    if scaler is None:
+        scaler = MinMaxScaler()
+        scaler.fit(new_dataset)
     new_dataset = scaler.transform(new_dataset)
     # print(scaler.scale_, scaler.data_min_, scaler.data_max_)
     # for i, d in enumerate(new_dataset2):
     #     print(d, ((d - scaler.data_min_)*scaler.scale_*2**16).astype(np.int64), new_dataset[i])
+    if return_scaler:
+        return new_dataset, new_labels, scaler
     return new_dataset, new_labels
 
 if __name__ == '__main__':
@@ -245,8 +248,8 @@ if __name__ == '__main__':
     train_data = torch.utils.data.Subset(dataset, train_indices)
     test_data = torch.utils.data.Subset(dataset, test_indices)
 
-    new_dataset_train, new_labels_train = get_dataset(train_data, args.is_binary)
-    new_dataset_test, new_labels_test = get_dataset(test_data, args.is_binary)
+    new_dataset_train, new_labels_train, scaler = get_dataset(train_data, args.is_binary, return_scaler=True)
+    new_dataset_test, new_labels_test = get_dataset(test_data, args.is_binary, scaler=scaler)
     train_trainset = PacketFlowDataset(new_dataset_train, new_labels_train)
     test_testset = PacketFlowDataset(new_dataset_test, new_labels_test)
     train_trainset, train_valset = random_split(train_trainset, [round(len(train_trainset)*split_r), round(len(train_trainset)*(1 - split_r))], generator=torch.Generator().manual_seed(SEED))
@@ -302,7 +305,8 @@ if __name__ == '__main__':
                 'hidden_sizes': args.hidden_sizes,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
-                'test_acc': acc},
+                'test_acc': acc,
+                'scaler': scaler},
                 f"{args.save_dir}/mlp_pktflw.th")
     all_labels = np.array(all_labels).squeeze()
     all_preds = np.array(all_preds)

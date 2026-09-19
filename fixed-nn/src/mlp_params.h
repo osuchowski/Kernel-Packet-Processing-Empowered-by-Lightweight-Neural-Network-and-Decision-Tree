@@ -21,6 +21,10 @@
 #include <stdint.h>
 
 
+// normalization constants
+extern const int64_t data_min[12];
+extern const int64_t data_scale[12];
+
 // quantization/dequantization constants
 extern const int layer_1_s_x;
 extern const int layer_1_s_x_inv;
